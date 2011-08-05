@@ -29,7 +29,7 @@ if [ -z "$debug" ] ; then
 	export SIM_HOST
 	export OSM_TMP_DIR
 	export OSM_CACHE_DIR
-	time LD_PRELOAD=${umad2sim} ${cmd} ${cmd_args}
+	LD_PRELOAD=${umad2sim} time ${cmd} ${cmd_args}
 	rc=$?
 	exit $rc
 else
