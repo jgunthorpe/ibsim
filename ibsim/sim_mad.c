@@ -152,11 +152,8 @@ static int decode_sim_MAD(Client * cl, struct sim_request * r, ib_rpc_t * rpc,
 
 	if (rpc->mgtclass == 0x81) {	// direct route
 		// word 9
-		if (mad_get_field(buf, 0, IB_DRSMP_DRDLID_F) != 0xffff ||
-		    mad_get_field(buf, 0, IB_DRSMP_DRSLID_F) != 0xffff) {
-			IBWARN("dr[ds]lids are used (not supported)");
-			return -1;
-		}
+		path->drslid = mad_get_field(buf, 0, IB_DRSMP_DRSLID_F);
+		path->drdlid = mad_get_field(buf, 0, IB_DRSMP_DRDLID_F);
 		// bytes 128 - 256
 		if (!response)
 			mad_get_array(buf, 0, IB_DRSMP_PATH_F, path->p);
@@ -1113,11 +1110,27 @@ static Port *direct_route_out_MAD(Port * port, ib_dr_path_t * path)
 
 static Port *route_MAD(Port * port, int response, int lid, ib_dr_path_t * path)
 {
-	if (lid >= 0 && lid < 0xffff)
-		return lid_route_MAD(port, lid);
+	if (lid >= 0 && lid < 0xffff) {
+		port = lid_route_MAD(port, lid);
+		if (!port)
+			return NULL;
+		if (!path)
+			return port;
+	} else if (!path)
+		return NULL; // permissive LID with no DR
 
-	return response ? direct_route_in_MAD(port, path) :
-	    direct_route_out_MAD(port, path);
+	if (response) {
+		port = direct_route_in_MAD(port, path);
+		lid = path->drslid;
+	} else {
+		port = direct_route_out_MAD(port, path);
+		lid = path->drdlid;
+	}
+
+	if (port && lid >= 0 && lid < 0xffff)
+		port = lid_route_MAD(port, lid);
+
+	return port;
 }
 
 static Smpfn *get_handle_fn(ib_rpc_t rpc, int response)
@@ -1176,7 +1189,9 @@ int process_packet(Client * cl, void *p, int size, Client ** dcl)
 		return 0;
 	}
 
-	if (!(port = route_MAD(cl->port, response, ntohs(r->dlid), &path))) {
+	port = route_MAD(cl->port, response, ntohs(r->dlid),
+			 rpc.mgtclass == 0x81 ? &path : NULL);
+	if (!port) {
 		IBWARN("routing failed: no route to dest lid %u path %s",
 		       ntohs(r->dlid), pathstr(0, &path));
 		goto _dropped;
@@ -1211,6 +1226,17 @@ int process_packet(Client * cl, void *p, int size, Client ** dcl)
 	reply_MAD(r->mad, &rpc, &path, status, data);
 
 	tlid = r->dlid;
+	// SMI behavior 14.2.2.2 point 3
+	if (rpc.mgtclass == 0x81)
+	{
+		tlid = path.drdlid;
+		if (tlid == 0xFFFF)
+			r->slid = 0xFFFF;
+		else if (port->node->type == SWITCH_NODE)
+			r->slid = port->lid;
+		else
+			goto _dropped;
+	}
 	r->dlid = r->slid;
 	r->slid = tlid;
 
@@ -1220,7 +1246,8 @@ int process_packet(Client * cl, void *p, int size, Client ** dcl)
 
 	r->status = 0;
 
-	port = route_MAD(port, 1, ntohs(r->dlid), &path);
+	port = route_MAD(port, 1, ntohs(r->dlid),
+			 rpc.mgtclass == 0x81 ? &path : NULL);
 	if (!port || cl->port->node != port->node) {
 		VERB("PKT roll back did not succeed");
 		goto _dropped;
