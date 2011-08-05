@@ -62,8 +62,8 @@ struct sim_port {
 #define SIM_CTL_MAX_DATA	64
 
 struct sim_request {
-	uint32_t dlid;
-	uint32_t slid;
+	uint16_t dlid;
+	uint16_t slid;
 	uint32_t dqp;
 	uint32_t sqp;
 	uint32_t status;
