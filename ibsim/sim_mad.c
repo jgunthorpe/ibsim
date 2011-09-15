@@ -385,17 +385,26 @@ static int do_guidinfo(Port * port, unsigned op, uint32_t mod, uint8_t * data)
 	Node *node = port->node;
 	int status = 0;
 	uint64_t portguid = node->nodeguid + port->portnum;
+	if (node->type == SWITCH_NODE)
+		portguid = node->nodeguid;
 
-	if (op != IB_MAD_METHOD_GET)    // only get currently supported (non compliant)
-		status = ERR_METHOD_UNSUPPORTED;
-
-	memset(data, 0, IB_SMP_DATA_SIZE);
-	if (mod == 0) {
-		if (node->type == SWITCH_NODE)
-			mad_encode_field(data, IB_GUID_GUID0_F, &node->nodeguid);
-		else
+	if (op == IB_MAD_METHOD_SET) {
+		/* The PortInfo.GuidCap is hardwired to 1, so the only valid input
+		   to a Set is the port GUID followed by zeros on block 0. */
+		int i = mod == 0?1:0;
+		for (; i != 8; ++i)
+			if (mad_get_field64(data, i*8, IB_GUID_GUID0_F) != 0)
+				status = ERR_BAD_PARAM;
+		if (mod != 0 ||
+		    mad_get_field64(data, 0, IB_GUID_GUID0_F) != portguid)
+			status = ERR_BAD_PARAM;
+	} else if (op == IB_MAD_METHOD_GET) {
+		memset(data, 0, IB_SMP_DATA_SIZE);
+		if (mod == 0)
 			mad_encode_field(data, IB_GUID_GUID0_F, &portguid);
 	}
+	else
+		status = ERR_METHOD_UNSUPPORTED;
 
 	return status;
 }
